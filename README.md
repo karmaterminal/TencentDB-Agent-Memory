@@ -217,6 +217,9 @@ MODEL_PROVIDER="custom"
 # -e MODEL_*                  Inject the config parameters above as env vars
 # -v hermes_data:/opt/data    Persist memory data to a named volume (survives restart)
 
+# Enter the Docker build directory (already cloned the repo and at the repo root)
+cd docker/opensource
+
 # Build
 docker build -f Dockerfile.hermes -t hermes-memory .
 

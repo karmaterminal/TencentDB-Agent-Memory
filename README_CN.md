@@ -220,6 +220,9 @@ MODEL_PROVIDER="custom"
 # -e MODEL_*                  将上方配置参数注入容器环境变量
 # -v hermes_data:/opt/data    记忆数据持久化到命名卷（容器重启后数据不丢）
 
+# 进入 Docker 构建目录（已 clone 仓库并位于仓库根目录）
+cd docker/opensource
+
 # 构建
 docker build -f Dockerfile.hermes -t hermes-memory .
 
