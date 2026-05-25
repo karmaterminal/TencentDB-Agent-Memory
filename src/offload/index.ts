@@ -1913,7 +1913,22 @@ class OffloadContextEngine {
 
       const afterSnap = buildTiktokenContextSnapshot("compact_after", messages, null, null, precomputed);
       logger.info(`[context-offload] <<< compact END (self_emergency) ${Date.now() - _compactStart}ms — ${snap.totalTokens}→${afterSnap.totalTokens} tokens, deleted=${emergencyResult.deletedCount} msgs`);
-      return { ok: true, compacted: true, reason: "self_emergency", messages };
+      // Build minimal summary from deleted tool calls so post-compaction sessions aren't amnesiac
+      const deletedSummary = emergencyResult.deletedToolCallIds.length > 0
+        ? `[Emergency compaction: removed ${emergencyResult.deletedCount} tool messages (${snap.totalTokens - afterSnap.totalTokens} tokens freed). Deleted tool IDs: ${emergencyResult.deletedToolCallIds.slice(0, 10).join(", ")}${emergencyResult.deletedToolCallIds.length > 10 ? "..." : ""}]`
+        : `[Emergency compaction: ${snap.totalTokens}→${afterSnap.totalTokens} tokens]`;
+      return {
+        ok: true,
+        compacted: true,
+        reason: "self_emergency",
+        messages,
+        result: {
+          summary: deletedSummary,
+          tokensBefore: snap.totalTokens,
+          tokensAfter: afterSnap.totalTokens,
+          firstKeptEntryId: messages[0]?.id ?? undefined,
+        },
+      };
     } catch (err) {
       logger.error(`[context-offload] <<< compact ERROR: ${err} (${Date.now() - _compactStart}ms)`);
       return { ok: false, compacted: false, reason: String(err) };
