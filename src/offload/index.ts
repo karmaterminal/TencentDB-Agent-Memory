@@ -386,27 +386,51 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         } : {};
 
         // Lazy proxy: resolves copilot bearer token on first L1 call
+        // Key insight from copilot-421-investigation: resolveApiKeyForProvider returns
+        // the GitHub PAT, not the copilot bearer. We must exchange it via
+        // resolveCopilotApiToken (same pattern as simple-completion-runtime.ts:148-157).
         const lazyClient = {
           async _ensureClient(): Promise<LocalLlmClient | null> {
             if (_resolvedClient) return _resolvedClient;
             if (_resolveAttempted) return null;
             _resolveAttempted = true;
             try {
+              // Step 1: Get the GitHub PAT from auth profiles
               const authResult = await api.runtime.modelAuth.resolveApiKeyForProvider({
                 provider: _providerKey,
                 cfg: api.config as any,
               });
-              if (authResult?.apiKey) {
-                _resolvedClient = new LocalLlmClient(
-                  { baseUrl: _baseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs, headers: copilotHeaders },
-                  logger,
-                );
-                logger.info(`[context-offload] Local LLM mode: resolved live token for provider "${_providerKey}" (mode=${authResult.mode}, source=${authResult.source})`);
-              } else {
-                logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider returned no apiKey for "${_providerKey}". L1/L1.5/L2 disabled.`);
+              if (!authResult?.apiKey) {
+                logger.error(`[context-offload] Copilot: no PAT resolved. L1/L1.5/L2 disabled.`);
+                return null;
               }
-            } catch (authErr) {
-              logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider failed for "${_providerKey}": ${authErr}. L1/L1.5/L2 disabled.`);
+              // Step 2: Exchange PAT for copilot bearer token (the missing step that caused 421)
+              let resolveCopilotApiToken: any;
+              try {
+                const sdk = await import("openclaw/plugin-sdk" as any);
+                resolveCopilotApiToken = sdk.resolveCopilotApiToken;
+              } catch {
+                logger.error(`[context-offload] Copilot: cannot import resolveCopilotApiToken. L1/L1.5/L2 disabled.`);
+                return null;
+              }
+              const copilotToken = await resolveCopilotApiToken({
+                githubToken: authResult.apiKey,
+              });
+              // Step 3: Use exchanged bearer + derived baseUrl
+              _resolvedClient = new LocalLlmClient(
+                {
+                  baseUrl: copilotToken.baseUrl,
+                  apiKey: copilotToken.token,
+                  model: _modelId,
+                  temperature: _temperature,
+                  timeoutMs: _timeoutMs,
+                  headers: copilotHeaders,
+                },
+                logger,
+              );
+              logger.info(`[context-offload] Copilot: PAT exchanged for bearer, baseUrl=${copilotToken.baseUrl}, model=${_modelId}`);
+            } catch (err) {
+              logger.error(`[context-offload] Copilot token exchange failed: ${err}. L1/L1.5/L2 disabled.`);
             }
             return _resolvedClient;
           },
