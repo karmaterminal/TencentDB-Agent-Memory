@@ -390,10 +390,23 @@ export class CleanContextRunner {
         ...(this.options.config as Record<string, unknown>),
         plugins: {
           ...((this.options.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined),
-          // Disable most plugin hooks but preserve auth-providing plugin entries
-          // so the embedded session can authenticate against model providers (e.g. github-copilot).
-          enabled: false,
-          entries: (((this.options.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined)?.entries as Record<string, unknown> | undefined) ?? {},
+          // Enable only the copilot provider plugin so its prepareRuntimeAuth hook
+          // fires and performs the PAT→bearer token exchange. Block all other plugins
+          // (especially memory-tdai) to prevent recursion.
+          enabled: true,
+          allow: ["github-copilot"],
+          slots: {
+            ...((((this.options.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined)?.slots as Record<string, unknown> | undefined) ?? {}),
+            memory: "none",
+            contextEngine: "none",
+          },
+          entries: {
+            ...((((this.options.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined)?.entries as Record<string, unknown> | undefined) ?? {}),
+            "github-copilot": {
+              ...(((((this.options.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined)?.entries as Record<string, unknown> | undefined)?.["github-copilot"] as Record<string, unknown> | undefined) ?? {}),
+              enabled: true,
+            },
+          },
         },
         tools: {
           ...((this.options.config as Record<string, unknown>)?.tools as Record<string, unknown> | undefined),
