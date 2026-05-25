@@ -89,8 +89,16 @@ export async function callLlm(
         headers: config.headers,
       });
 
+      // Use Responses API for copilot (copilot routes GPT models via /v1/responses,
+      // not /v1/chat/completions — the latter returns 421 Misdirected Request).
+      // Non-copilot providers use standard chat completions.
+      const isCopilot = config.headers?.["Copilot-Integration-Id"] != null;
+      const modelInstance = isCopilot
+        ? provider.responses(config.model)
+        : provider.chat(config.model);
+
       const result = await generateText({
-        model: provider.chat(config.model),
+        model: modelInstance,
         system: opts.systemPrompt,
         prompt: opts.userPrompt,
         temperature,
