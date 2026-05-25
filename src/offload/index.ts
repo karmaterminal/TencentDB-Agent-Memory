@@ -1834,40 +1834,26 @@ class OffloadContextEngine {
       return { ok: false, compacted: false, reason: "no_session_manager" };
     }
     try {
-      // Try delegating to runtime's built-in compaction first
+      // Try delegating to runtime's built-in compaction first.
+      // Prefer bare specifier — resolves in-process via gateway's package exports.
       let delegateFn: any;
       try {
-        const { createRequire } = await import("node:module");
-        const globalRequire = createRequire("/usr/local/lib/node_modules/openclaw/");
-        const sdk = globalRequire("openclaw/plugin-sdk");
+        const sdk = await import("openclaw/plugin-sdk" as any);
         delegateFn = sdk.delegateCompactionToRuntime;
-        logger.info(`[context-offload] compact: resolved via createRequire (global path)`);
-      } catch (e1) {
-        logger.warn(`[context-offload] compact: createRequire failed: ${e1}`);
+        logger.info(`[context-offload] compact: resolved via bare import (in-process)`);
+      } catch {
+        // Fallback: derive gateway root from the running process entry point
         try {
-          const paths = [
-            "/usr/local/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
-            "/usr/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
-            // Source-linked installs (symlinked from nvm or direct checkout)
-            `${process.env.HOME}/flesh_beast_tmp/openclaw/dist/plugin-sdk/index.js`,
-          ];
-          for (const p of paths) {
-            try {
-              const sdk = await import(p);
-              delegateFn = sdk.delegateCompactionToRuntime;
-              logger.info(`[context-offload] compact: resolved via absolute path: ${p}`);
-              break;
-            } catch (ep) {
-              logger.warn(`[context-offload] compact: absolute path failed: ${p} → ${ep}`);
-            }
-          }
-        } catch { /* ignore */ }
-        if (!delegateFn) {
-          try {
-            const sdk = await import("openclaw/plugin-sdk" as any);
-            delegateFn = sdk.delegateCompactionToRuntime;
-            logger.info(`[context-offload] compact: resolved via direct import`);
-          } catch { /* ignore */ }
+          const { createRequire } = await import("node:module");
+          const { dirname } = await import("node:path");
+          const entryPoint = process.argv[1] || "";
+          const gatewayDir = entryPoint ? dirname(dirname(entryPoint)) : "/usr/local/lib/node_modules/openclaw";
+          const req = createRequire(gatewayDir + "/");
+          const sdk = req("openclaw/plugin-sdk");
+          delegateFn = sdk.delegateCompactionToRuntime;
+          logger.info(`[context-offload] compact: resolved via createRequire from: ${gatewayDir}`);
+        } catch (e2) {
+          logger.warn(`[context-offload] compact: delegateCompactionToRuntime unavailable (${e2}). Self-executing fallback.`);
         }
       }
 
