@@ -24,6 +24,10 @@ export interface LocalLlmClientConfig {
   model: string;
   temperature?: number;
   timeoutMs?: number;
+  /** Custom headers to include with every request (e.g. copilot IDE headers). */
+  headers?: Record<string, string>;
+  /** Use raw fetch to the Responses API (/v1/responses) instead of AI SDK chat completions. */
+  useResponsesApi?: boolean;
 }
 
 export class LocalLlmClient {
@@ -37,9 +41,11 @@ export class LocalLlmClient {
       model: cfg.model,
       temperature: cfg.temperature ?? 0.2,
       timeoutMs: cfg.timeoutMs ?? 120_000,
+      headers: cfg.headers,
+      useResponsesApi: cfg.useResponsesApi,
     };
     this.logger = logger;
-    logger?.info?.(`${TAG} Initialized: model=${cfg.model}, baseUrl=${cfg.baseUrl}`);
+    logger?.info?.(`${TAG} Initialized: model=${cfg.model}, baseUrl=${cfg.baseUrl}, responsesApi=${!!cfg.useResponsesApi}`);
   }
 
   // ─── L1 Summarize ──────────────────────────────────────────────────────────
