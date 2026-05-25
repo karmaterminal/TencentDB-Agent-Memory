@@ -455,6 +455,11 @@ export class CleanContextRunner {
         runId,
         provider: this.resolvedProvider,
         model: this.resolvedModel,
+        // Propagate auth profile so embedded sub-sessions can authenticate
+        // against token-exchange providers (e.g. github-copilot). Without this,
+        // the embedded runner falls through to a default auth path that lacks
+        // the parent session's copilot token → 421 Misdirected Request.
+        authProfileId: this.resolvedProvider ? `${this.resolvedProvider}:github` : undefined,
         // Do NOT pass disableTools:true — that produces tools:[] which some
         // providers (qwencode) reject with "[] is too short - 'tools'".
         // Instead rely on cleanConfig.tools.allow to restrict the tool set
