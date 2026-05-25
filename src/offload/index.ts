@@ -51,6 +51,7 @@ import type { OffloadConfig } from "../config.js";
 import type { PluginConfig, PluginLogger } from "./types.js";
 import { BackendClient } from "./backend-client.js";
 import { LocalLlmClient } from "./local-llm/index.js";
+import { OpenClawOffloadAdapter } from "./openclaw-offload-adapter.js";
 import type { L1Request, L15Request, L2Request } from "./backend-client.js";
 import { parseMmdMeta } from "./mmd-meta.js";
 import { sanitizeText, writeRefMd } from "./storage.js";
@@ -311,7 +312,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     `[context-offload] user-id resolved: "${_resolvedUserId}" (source=${getUserIdSource() ?? "?"})`,
   );
 
-  let backendClient: BackendClient | LocalLlmClient | null = null;
+  let backendClient: BackendClient | LocalLlmClient | OpenClawOffloadAdapter | null = null;
 
   if (offloadConfig.mode === "backend") {
     // Remote backend mode
@@ -364,9 +365,20 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
           logger,
         );
+      } else if (!apiKey) {
+        backendClient = new OpenClawOffloadAdapter({
+          config: api.config,
+          modelRef: resolvedModelRef,
+          agentRuntime: api.runtime?.agent,
+          logger,
+          timeoutMs: offloadConfig.backendTimeoutMs,
+        });
+        logger.info(
+          `[context-offload] Local LLM mode using OpenClaw native model routing fallback: ${resolvedModelRef}`,
+        );
       } else {
         logger.error(
-          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
+          `[context-offload] Local LLM mode failed: provider "${providerKey}" missing baseUrl in models.providers. ` +
           `L1/L1.5/L2 disabled.`,
         );
       }
