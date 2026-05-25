@@ -390,7 +390,10 @@ export class CleanContextRunner {
         ...(this.options.config as Record<string, unknown>),
         plugins: {
           ...((this.options.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined),
+          // Disable most plugin hooks but preserve auth-providing plugin entries
+          // so the embedded session can authenticate against model providers (e.g. github-copilot).
           enabled: false,
+          entries: (((this.options.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined)?.entries as Record<string, unknown> | undefined) ?? {},
         },
         tools: {
           ...((this.options.config as Record<string, unknown>)?.tools as Record<string, unknown> | undefined),
