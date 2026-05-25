@@ -365,18 +365,63 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
           logger,
         );
-      } else if (baseUrl && !apiKey && api.runtime?.agent) {
-        // github-copilot authenticates through OpenClaw token exchange, so it
-        // has a baseUrl but no raw apiKey for the AI SDK LocalLlmClient path.
-        backendClient = new OpenClawLocalLlmClient(
-          {
-            config: api.config,
-            agentRuntime: api.runtime.agent,
-            modelRef: resolvedModelRef,
-            timeoutMs: offloadConfig.backendTimeoutMs,
+      } else if (baseUrl && !apiKey && api.runtime?.modelAuth?.resolveApiKeyForProvider) {
+        // github-copilot authenticates through OpenClaw token exchange — resolve
+        // the live bearer token via modelAuth API and use the standard LocalLlmClient.
+        // Since registerOffload is sync, we resolve the token lazily on first L1 call
+        // via a deferred init wrapper.
+        const _providerKey = providerKey;
+        const _baseUrl = baseUrl;
+        const _modelId = modelId;
+        const _temperature = offloadConfig.temperature;
+        const _timeoutMs = offloadConfig.backendTimeoutMs;
+        let _resolvedClient: LocalLlmClient | null = null;
+        let _resolveAttempted = false;
+
+        // Create a proxy that resolves the token on first call
+        const lazyClient = {
+          async _ensureClient(): Promise<LocalLlmClient | null> {
+            if (_resolvedClient) return _resolvedClient;
+            if (_resolveAttempted) return null;
+            _resolveAttempted = true;
+            try {
+              const authResult = await api.runtime.modelAuth.resolveApiKeyForProvider({
+                provider: _providerKey,
+                cfg: api.config as any,
+              });
+              if (authResult?.apiKey) {
+                _resolvedClient = new LocalLlmClient(
+                  { baseUrl: _baseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs },
+                  logger,
+                );
+                logger.info(`[context-offload] Local LLM mode: resolved live token for provider "${_providerKey}" (mode=${authResult.mode}, source=${authResult.source})`);
+              } else {
+                logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider returned no apiKey for "${_providerKey}". L1/L1.5/L2 disabled.`);
+              }
+            } catch (authErr) {
+              logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider failed for "${_providerKey}": ${authErr}. L1/L1.5/L2 disabled.`);
+            }
+            return _resolvedClient;
           },
-          logger,
-        );
+          // Proxy the LocalLlmClient methods
+          async l1Summarize(...args: any[]) {
+            const client = await this._ensureClient();
+            if (!client) return { entries: [] };
+            return (client as any).l1Summarize(...args);
+          },
+          async l15Judge(...args: any[]) {
+            const client = await this._ensureClient();
+            if (!client) return { taskCompleted: false, isContinuation: false, isLongTask: false };
+            return (client as any).l15Judge(...args);
+          },
+          async l2Generate(...args: any[]) {
+            const client = await this._ensureClient();
+            if (!client) return { mermaid: "" };
+            return (client as any).l2Generate(...args);
+          },
+        };
+        backendClient = lazyClient as any;
+        logger.info(`[context-offload] Local LLM mode: deferred token resolution for provider "${_providerKey}" (will resolve on first L1 call)`);
       } else {
         logger.error(
           `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
