@@ -60,30 +60,56 @@ export async function callLlm(
     let text: string;
 
     if (config.useResponsesApi) {
-      // Use the official OpenAI SDK's Responses API — same format as the main session
-      const client = new OpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl,
-        defaultHeaders: config.headers,
-        timeout: timeoutMs,
+      // Raw fetch to copilot Responses API — no SDK, no embedded runner.
+      // Matches main session's request shape from openai-transport-stream.ts:2046-2055.
+      const url = `${config.baseUrl}/v1/responses`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${config.apiKey}`,
+          ...(config.headers ?? {}),
+        },
+        body: JSON.stringify({
+          model: config.model,
+          input: [{ role: "user", content: opts.userPrompt }],
+          instructions: opts.systemPrompt,
+          stream: true,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
       });
 
-      const stream = await client.responses.create({
-        model: config.model,
-        instructions: opts.systemPrompt,
-        input: [{ role: "user" as const, content: opts.userPrompt }],
-        temperature,
-        stream: true,
-      });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        throw new Error(`${res.status} ${res.statusText}: ${errBody.slice(0, 200)}`);
+      }
 
-      // Collect streamed response text
-      let chunks: string[] = [];
-      for await (const event of stream as any) {
-        if (event?.type === "response.output_text.delta" && event?.delta) {
-          chunks.push(event.delta);
-        } else if (event?.type === "response.completed" && event?.response?.output_text) {
-          chunks = [event.response.output_text];
-          break;
+      // Collect SSE stream
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response body");
+      const decoder = new TextDecoder();
+      const chunks: string[] = [];
+      let done = false;
+      while (!done) {
+        const { value, done: streamDone } = await reader.read();
+        done = streamDone;
+        if (value) {
+          const lines = decoder.decode(value, { stream: true }).split("\n");
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") { done = true; break; }
+            try {
+              const event = JSON.parse(data);
+              if (event.type === "response.output_text.delta" && event.delta) {
+                chunks.push(event.delta);
+              } else if (event.type === "response.completed" && event.response?.output_text) {
+                chunks.length = 0;
+                chunks.push(event.response.output_text);
+                done = true;
+              }
+            } catch { /* skip non-JSON lines */ }
+          }
         }
       }
       text = chunks.join("").trim();
