@@ -8,6 +8,7 @@
 
 ### 🐛 修复
 
+- **Offload GitHub Copilot 本地模式无静态 API Key 时改走 OpenClaw 原生路由**：`src/offload/index.ts` 新增 `OpenClawLLMRunnerFactory`/adapter 导入（L52-L55），在 local LLM 分支保留 `baseUrl && apiKey` 的 `LocalLlmClient` 路径并为 `baseUrl && !apiKey` 增加 `api.runtime.agent` 注入的 OpenClaw native fallback（L316-L382）；新增 `src/offload/openclaw-llm-adapter.ts`（L1-L196）映射 L1/L1.5/L2 prompt 与解析/超时语义，新增 `src/offload/openclaw-llm-adapter.test.ts`（L1-L136）覆盖路由与超时。
 - **Hermes Docker 镜像 `config.yaml` 缺少 `api_key` 字段**：`Dockerfile.hermes` 的 CMD 脚本将 API Key 写入了 `.env` 的 `OPENAI_API_KEY`，但未写入 `config.yaml` 的 `model.api_key`，导致 `provider: custom` 时 Hermes 无法找到认证凭据（报 401 Authentication Fails）。现修复为在 `config.yaml` 的 `model` 段同步写入 `api_key: "${MODEL_API_KEY}"`。
 
 ---

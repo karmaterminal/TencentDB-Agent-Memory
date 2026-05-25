@@ -49,8 +49,10 @@ import {
 import { findHistoryMmdInsertionPoint } from "./mmd-injector.js";
 import type { OffloadConfig } from "../config.js";
 import type { PluginConfig, PluginLogger } from "./types.js";
+import { OpenClawLLMRunnerFactory } from "../adapters/openclaw/llm-runner.js";
 import { BackendClient } from "./backend-client.js";
 import { LocalLlmClient } from "./local-llm/index.js";
+import { OpenClawOffloadLlmAdapter } from "./openclaw-llm-adapter.js";
 import type { L1Request, L15Request, L2Request } from "./backend-client.js";
 import { parseMmdMeta } from "./mmd-meta.js";
 import { sanitizeText, writeRefMd } from "./storage.js";
@@ -311,7 +313,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     `[context-offload] user-id resolved: "${_resolvedUserId}" (source=${getUserIdSource() ?? "?"})`,
   );
 
-  let backendClient: BackendClient | LocalLlmClient | null = null;
+  let backendClient: BackendClient | LocalLlmClient | OpenClawOffloadLlmAdapter | null = null;
 
   if (offloadConfig.mode === "backend") {
     // Remote backend mode
@@ -364,9 +366,23 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
           logger,
         );
+      } else if (baseUrl && !apiKey) {
+        logger.warn(
+          `[context-offload] Local LLM provider "${providerKey}" has baseUrl but no apiKey; ` +
+          "falling back to OpenClaw native model routing.",
+        );
+        const runnerFactory = new OpenClawLLMRunnerFactory({
+          config: api.config,
+          agentRuntime: api.runtime.agent,
+          logger,
+        });
+        backendClient = new OpenClawOffloadLlmAdapter(
+          { runnerFactory, modelRef: resolvedModelRef, timeoutMs: offloadConfig.backendTimeoutMs },
+          logger,
+        );
       } else {
         logger.error(
-          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
+          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl in models.providers. ` +
           `L1/L1.5/L2 disabled.`,
         );
       }
