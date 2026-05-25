@@ -365,84 +365,22 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
           logger,
         );
-      } else if (baseUrl && !apiKey && api.runtime?.modelAuth?.resolveApiKeyForProvider) {
-        // github-copilot authenticates through OpenClaw token exchange — resolve
-        // the live bearer token via modelAuth API and use the standard LocalLlmClient.
-        // Since registerOffload is sync, we resolve the token lazily on first L1 call
-        // via a deferred init wrapper.
-        const _providerKey = providerKey;
-        const _baseUrl = baseUrl;
-        const _modelId = modelId;
-        const _temperature = offloadConfig.temperature;
-        const _timeoutMs = offloadConfig.backendTimeoutMs;
-        let _resolvedClient: LocalLlmClient | null = null;
-        let _resolveAttempted = false;
-
-        // Create a proxy that resolves the token on first call
-        const lazyClient = {
-          async _ensureClient(): Promise<LocalLlmClient | null> {
-            if (_resolvedClient) return _resolvedClient;
-            if (_resolveAttempted) return null;
-            _resolveAttempted = true;
-            try {
-              const authResult = await api.runtime.modelAuth.resolveApiKeyForProvider({
-                provider: _providerKey,
-                cfg: api.config as any,
-              });
-              if (authResult?.apiKey) {
-                // Copilot tokens may encode a proxy endpoint that differs from
-                // the static baseUrl in config. Extract it to avoid 421.
-                let effectiveBaseUrl = _baseUrl;
-                const proxyMatch = authResult.apiKey.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
-                if (proxyMatch?.[1]) {
-                  const proxyHost = proxyMatch[1].trim().replace(/^proxy\./i, "api.");
-                  if (proxyHost) {
-                    effectiveBaseUrl = `https://${proxyHost}`;
-                    logger.info(`[context-offload] Local LLM mode: derived baseUrl from token proxy-ep: ${effectiveBaseUrl}`);
-                  }
-                }
-                // Copilot API requires IDE-specific headers for routing.
-                // Without these, the endpoint returns 421 Misdirected Request.
-                const copilotHeaders: Record<string, string> = _providerKey.includes("copilot") ? {
-                  "Accept-Encoding": "identity",
-                  "Editor-Version": "vscode/1.107.0",
-                  "Editor-Plugin-Version": "copilot-chat/0.35.0",
-                  "User-Agent": "GitHubCopilotChat/0.35.0",
-                  "Copilot-Integration-Id": "vscode-chat",
-                  "Openai-Organization": "github-copilot",
-                } : {};
-                _resolvedClient = new LocalLlmClient(
-                  { baseUrl: effectiveBaseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs, headers: copilotHeaders },
-                  logger,
-                );
-                logger.info(`[context-offload] Local LLM mode: resolved live token for provider "${_providerKey}" (mode=${authResult.mode}, source=${authResult.source})`);
-              } else {
-                logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider returned no apiKey for "${_providerKey}". L1/L1.5/L2 disabled.`);
-              }
-            } catch (authErr) {
-              logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider failed for "${_providerKey}": ${authErr}. L1/L1.5/L2 disabled.`);
-            }
-            return _resolvedClient;
+      } else if (baseUrl && !apiKey && api.runtime?.agent) {
+        // Prefer embedded runner path (CleanContextRunner → runEmbeddedPiAgent).
+        // With 3fe707c preserving plugins.entries in the embedded session config,
+        // the copilot auth plugin can resolve tokens within the sub-session.
+        // This is the proven auth path — the copilot plugin handles the full
+        // two-step token exchange (PAT → copilot bearer) internally.
+        backendClient = new OpenClawLocalLlmClient(
+          {
+            config: api.config,
+            agentRuntime: api.runtime.agent,
+            modelRef: resolvedModelRef,
+            timeoutMs: offloadConfig.backendTimeoutMs,
           },
-          // Proxy the LocalLlmClient methods
-          async l1Summarize(...args: any[]) {
-            const client = await this._ensureClient();
-            if (!client) return { entries: [] };
-            return (client as any).l1Summarize(...args);
-          },
-          async l15Judge(...args: any[]) {
-            const client = await this._ensureClient();
-            if (!client) return { taskCompleted: false, isContinuation: false, isLongTask: false };
-            return (client as any).l15Judge(...args);
-          },
-          async l2Generate(...args: any[]) {
-            const client = await this._ensureClient();
-            if (!client) return { mermaid: "" };
-            return (client as any).l2Generate(...args);
-          },
-        };
-        backendClient = lazyClient as any;
-        logger.info(`[context-offload] Local LLM mode: deferred token resolution for provider "${_providerKey}" (will resolve on first L1 call)`);
+          logger,
+        );
+        logger.info(`[context-offload] Local LLM mode: using OpenClaw embedded runner (copilot auth via preserved plugin entries)`);
       } else {
         logger.error(
           `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
