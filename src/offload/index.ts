@@ -365,22 +365,69 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
           logger,
         );
-      } else if (baseUrl && !apiKey && api.runtime?.agent) {
-        // Prefer embedded runner path (CleanContextRunner → runEmbeddedPiAgent).
-        // With 3fe707c preserving plugins.entries in the embedded session config,
-        // the copilot auth plugin can resolve tokens within the sub-session.
-        // This is the proven auth path — the copilot plugin handles the full
-        // two-step token exchange (PAT → copilot bearer) internally.
-        backendClient = new OpenClawLocalLlmClient(
-          {
-            config: api.config,
-            agentRuntime: api.runtime.agent,
-            modelRef: resolvedModelRef,
-            timeoutMs: offloadConfig.backendTimeoutMs,
+      } else if (baseUrl && !apiKey && api.runtime?.modelAuth?.resolveApiKeyForProvider) {
+        // Copilot provider: resolve bearer token via modelAuth API and call directly
+        // with required IDE routing headers. The copilot API requires these headers
+        // for request routing — without them it returns 421 Misdirected Request.
+        const _providerKey = providerKey;
+        const _baseUrl = baseUrl;
+        const _modelId = modelId;
+        const _temperature = offloadConfig.temperature;
+        const _timeoutMs = offloadConfig.backendTimeoutMs;
+        let _resolvedClient: LocalLlmClient | null = null;
+        let _resolveAttempted = false;
+
+        const copilotHeaders: Record<string, string> = _providerKey.includes("copilot") ? {
+          "Editor-Version": "vscode/1.107.0",
+          "Editor-Plugin-Version": "copilot-chat/0.35.0",
+          "User-Agent": "GitHubCopilotChat/0.35.0",
+          "Copilot-Integration-Id": "vscode-chat",
+          "Openai-Organization": "github-copilot",
+        } : {};
+
+        // Lazy proxy: resolves copilot bearer token on first L1 call
+        const lazyClient = {
+          async _ensureClient(): Promise<LocalLlmClient | null> {
+            if (_resolvedClient) return _resolvedClient;
+            if (_resolveAttempted) return null;
+            _resolveAttempted = true;
+            try {
+              const authResult = await api.runtime.modelAuth.resolveApiKeyForProvider({
+                provider: _providerKey,
+                cfg: api.config as any,
+              });
+              if (authResult?.apiKey) {
+                _resolvedClient = new LocalLlmClient(
+                  { baseUrl: _baseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs, headers: copilotHeaders },
+                  logger,
+                );
+                logger.info(`[context-offload] Local LLM mode: resolved live token for provider "${_providerKey}" (mode=${authResult.mode}, source=${authResult.source})`);
+              } else {
+                logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider returned no apiKey for "${_providerKey}". L1/L1.5/L2 disabled.`);
+              }
+            } catch (authErr) {
+              logger.error(`[context-offload] Local LLM mode: resolveApiKeyForProvider failed for "${_providerKey}": ${authErr}. L1/L1.5/L2 disabled.`);
+            }
+            return _resolvedClient;
           },
-          logger,
-        );
-        logger.info(`[context-offload] Local LLM mode: using OpenClaw embedded runner (copilot auth via preserved plugin entries)`);
+          async l1Summarize(...args: any[]) {
+            const client = await this._ensureClient();
+            if (!client) return { entries: [] };
+            return (client as any).l1Summarize(...args);
+          },
+          async l15Judge(...args: any[]) {
+            const client = await this._ensureClient();
+            if (!client) return { taskCompleted: false, isContinuation: false, isLongTask: false };
+            return (client as any).l15Judge(...args);
+          },
+          async l2Generate(...args: any[]) {
+            const client = await this._ensureClient();
+            if (!client) throw new Error("L2 client unavailable");
+            return (client as any).l2Generate(...args);
+          },
+        };
+        backendClient = lazyClient as any;
+        logger.info(`[context-offload] Local LLM mode: deferred copilot token resolution with IDE headers (will resolve on first L1 call)`);
       } else {
         logger.error(
           `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
