@@ -68,18 +68,25 @@ export async function callLlm(
         timeout: timeoutMs,
       });
 
-      const response = await client.responses.create({
+      const stream = await client.responses.create({
         model: config.model,
         instructions: opts.systemPrompt,
-        input: opts.userPrompt,
+        input: [{ role: "user" as const, content: opts.userPrompt }],
         temperature,
-        stream: false,
+        stream: true,
       });
 
-      // Extract text from the response
-      text = (response as any).output_text?.trim() ??
-        (response as any).output?.map((o: any) => o.content?.map((c: any) => c.text).join("") ?? "").join("").trim() ??
-        "";
+      // Collect streamed response text
+      let chunks: string[] = [];
+      for await (const event of stream as any) {
+        if (event?.type === "response.output_text.delta" && event?.delta) {
+          chunks.push(event.delta);
+        } else if (event?.type === "response.completed" && event?.response?.output_text) {
+          chunks = [event.response.output_text];
+          break;
+        }
+      }
+      text = chunks.join("").trim();
     } else {
       // Standard path: Vercel AI SDK for OpenAI-compatible endpoints
       const provider = createOpenAI({
