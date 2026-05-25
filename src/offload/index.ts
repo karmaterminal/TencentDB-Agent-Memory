@@ -51,6 +51,7 @@ import type { OffloadConfig } from "../config.js";
 import type { PluginConfig, PluginLogger } from "./types.js";
 import { BackendClient } from "./backend-client.js";
 import { LocalLlmClient } from "./local-llm/index.js";
+import { OpenClawLocalLlmClient } from "./local-llm/openclaw-adapter.js";
 import type { L1Request, L15Request, L2Request } from "./backend-client.js";
 import { parseMmdMeta } from "./mmd-meta.js";
 import { sanitizeText, writeRefMd } from "./storage.js";
@@ -311,7 +312,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     `[context-offload] user-id resolved: "${_resolvedUserId}" (source=${getUserIdSource() ?? "?"})`,
   );
 
-  let backendClient: BackendClient | LocalLlmClient | null = null;
+  let backendClient: BackendClient | LocalLlmClient | OpenClawLocalLlmClient | null = null;
 
   if (offloadConfig.mode === "backend") {
     // Remote backend mode
@@ -362,6 +363,18 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       if (baseUrl && apiKey) {
         backendClient = new LocalLlmClient(
           { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
+          logger,
+        );
+      } else if (baseUrl && !apiKey && api.runtime?.agent) {
+        // github-copilot authenticates through OpenClaw token exchange, so it
+        // has a baseUrl but no raw apiKey for the AI SDK LocalLlmClient path.
+        backendClient = new OpenClawLocalLlmClient(
+          {
+            config: api.config,
+            agentRuntime: api.runtime.agent,
+            modelRef: resolvedModelRef,
+            timeoutMs: offloadConfig.backendTimeoutMs,
+          },
           logger,
         );
       } else {
