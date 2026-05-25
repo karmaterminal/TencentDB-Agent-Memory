@@ -1,11 +1,15 @@
 /**
  * Unified LLM caller for offload local mode.
  *
- * Uses Vercel AI SDK (`ai` + `@ai-sdk/openai`) with "compatible" mode
- * to support any OpenAI-compatible backend.
+ * For copilot providers: uses the official OpenAI SDK's Responses API
+ * (client.responses.create) which matches what the main session uses.
+ *
+ * For other providers: uses Vercel AI SDK (`ai` + `@ai-sdk/openai`) with
+ * "compatible" mode for standard OpenAI-compatible endpoints.
  */
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import OpenAI from "openai";
 import type { PluginLogger } from "../types.js";
 
 const TAG = "[context-offload] [local-llm]";
@@ -15,7 +19,7 @@ export interface LlmCallerConfig {
   apiKey: string;
   /** Custom headers to include with every request (e.g. copilot IDE headers). */
   headers?: Record<string, string>;
-  /** Use the OpenAI Responses API (/v1/responses) instead of Chat Completions (/v1/chat/completions). */
+  /** Use the official OpenAI SDK Responses API (client.responses.create). */
   useResponsesApi?: boolean;
   model: string;
   temperature: number;
@@ -52,25 +56,51 @@ export async function callLlm(
     `systemLen=${opts.systemPrompt.length}, userLen=${opts.userPrompt.length}`,
   );
 
-  const provider = createOpenAI({
-    baseURL: config.baseUrl,
-    apiKey: config.apiKey,
-    compatibility: "compatible",
-    headers: config.headers,
-  });
-
   try {
-    const result = await generateText({
-      model: config.useResponsesApi ? (provider as any).responses(config.model) : provider.chat(config.model),
-      system: opts.systemPrompt,
-      prompt: opts.userPrompt,
-      temperature,
-      abortSignal: AbortSignal.timeout(timeoutMs),
-    });
+    let text: string;
 
-    const text = result.text.trim();
+    if (config.useResponsesApi) {
+      // Use the official OpenAI SDK's Responses API — same format as the main session
+      const client = new OpenAI({
+        apiKey: config.apiKey,
+        baseURL: config.baseUrl,
+        defaultHeaders: config.headers,
+        timeout: timeoutMs,
+      });
+
+      const response = await client.responses.create({
+        model: config.model,
+        instructions: opts.systemPrompt,
+        input: opts.userPrompt,
+        temperature,
+        stream: false,
+      });
+
+      // Extract text from the response
+      text = (response as any).output_text?.trim() ??
+        (response as any).output?.map((o: any) => o.content?.map((c: any) => c.text).join("") ?? "").join("").trim() ??
+        "";
+    } else {
+      // Standard path: Vercel AI SDK for OpenAI-compatible endpoints
+      const provider = createOpenAI({
+        baseURL: config.baseUrl,
+        apiKey: config.apiKey,
+        compatibility: "compatible",
+        headers: config.headers,
+      });
+
+      const result = await generateText({
+        model: provider.chat(config.model),
+        system: opts.systemPrompt,
+        prompt: opts.userPrompt,
+        temperature,
+        abortSignal: AbortSignal.timeout(timeoutMs),
+      });
+
+      text = result.text.trim();
+    }
+
     const elapsedMs = Date.now() - startMs;
-
     logger?.info?.(
       `${TAG} ${label} <<< ${elapsedMs}ms, output=${text.length} chars`,
     );
