@@ -60,28 +60,53 @@ export async function callLlm(
     let text: string;
 
     if (config.useResponsesApi) {
-      // Raw fetch to copilot Responses API — no SDK, no embedded runner.
-      // Matches main session's request shape from openai-transport-stream.ts:2046-2055.
+      // Raw fetch to copilot Responses API — match main session's request shape
+      // from openai-transport-stream.ts buildOpenAIResponsesParams +
+      // copilot-dynamic-headers.ts buildCopilotDynamicHeaders.
+      //
+      // Important deltas vs the prior shape that 400'd:
+      //   - System prompt goes inside `input` as the first item (role:"system"
+      //     with content[].type:"input_text"), NOT as top-level `instructions`.
+      //   - User prompt is a content item, not a bare string.
+      //   - Add `x-initiator: user` header (Copilot routes by initiator).
+      //   - Add `Accept-Encoding: identity` (avoids gzip framing surprises).
       const url = `${config.baseUrl}/v1/responses`;
+      const input: Array<Record<string, unknown>> = [];
+      if (opts.systemPrompt) {
+        input.push({
+          role: "system",
+          content: [{ type: "input_text", text: opts.systemPrompt }],
+        });
+      }
+      input.push({
+        role: "user",
+        content: [{ type: "input_text", text: opts.userPrompt }],
+      });
+      const body: Record<string, unknown> = {
+        model: config.model,
+        input,
+        stream: true,
+        store: false,
+      };
+      if (typeof temperature === "number") {
+        body.temperature = temperature;
+      }
       const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${config.apiKey}`,
+          "Accept-Encoding": "identity",
+          "x-initiator": "user",
           ...(config.headers ?? {}),
         },
-        body: JSON.stringify({
-          model: config.model,
-          input: [{ role: "user", content: opts.userPrompt }],
-          instructions: opts.systemPrompt,
-          stream: true,
-        }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
       });
 
       if (!res.ok) {
         const errBody = await res.text().catch(() => "");
-        throw new Error(`${res.status} ${res.statusText}: ${errBody.slice(0, 200)}`);
+        throw new Error(`${res.status} ${res.statusText}: ${errBody.slice(0, 400)}`);
       }
 
       // Collect SSE stream
