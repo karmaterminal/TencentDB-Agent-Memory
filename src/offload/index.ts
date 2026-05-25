@@ -390,6 +390,17 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
                 cfg: api.config as any,
               });
               if (authResult?.apiKey) {
+                // Copilot tokens may encode a proxy endpoint that differs from
+                // the static baseUrl in config. Extract it to avoid 421.
+                let effectiveBaseUrl = _baseUrl;
+                const proxyMatch = authResult.apiKey.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
+                if (proxyMatch?.[1]) {
+                  const proxyHost = proxyMatch[1].trim().replace(/^proxy\./i, "api.");
+                  if (proxyHost) {
+                    effectiveBaseUrl = `https://${proxyHost}`;
+                    logger.info(`[context-offload] Local LLM mode: derived baseUrl from token proxy-ep: ${effectiveBaseUrl}`);
+                  }
+                }
                 // Copilot API requires IDE-specific headers for routing.
                 // Without these, the endpoint returns 421 Misdirected Request.
                 const copilotHeaders: Record<string, string> = _providerKey.includes("copilot") ? {
@@ -401,7 +412,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
                   "Openai-Organization": "github-copilot",
                 } : {};
                 _resolvedClient = new LocalLlmClient(
-                  { baseUrl: _baseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs, headers: copilotHeaders },
+                  { baseUrl: effectiveBaseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs, headers: copilotHeaders },
                   logger,
                 );
                 logger.info(`[context-offload] Local LLM mode: resolved live token for provider "${_providerKey}" (mode=${authResult.mode}, source=${authResult.source})`);
