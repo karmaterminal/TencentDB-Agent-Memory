@@ -426,6 +426,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
                   temperature: _temperature,
                   timeoutMs: _timeoutMs,
                   headers: copilotHeaders,
+                  useResponsesApi: true,
                 },
                 logger,
               );

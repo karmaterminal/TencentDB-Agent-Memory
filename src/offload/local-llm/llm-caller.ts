@@ -15,6 +15,8 @@ export interface LlmCallerConfig {
   apiKey: string;
   /** Custom headers to include with every request (e.g. copilot IDE headers). */
   headers?: Record<string, string>;
+  /** Use the OpenAI Responses API (/v1/responses) instead of Chat Completions (/v1/chat/completions). */
+  useResponsesApi?: boolean;
   model: string;
   temperature: number;
   timeoutMs: number;
@@ -59,7 +61,7 @@ export async function callLlm(
 
   try {
     const result = await generateText({
-      model: provider.chat(config.model),
+      model: config.useResponsesApi ? (provider as any).responses(config.model) : provider.chat(config.model),
       system: opts.systemPrompt,
       prompt: opts.userPrompt,
       temperature,
