@@ -385,42 +385,43 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           "Openai-Organization": "github-copilot",
         } : {};
 
-        // Lazy proxy: resolves copilot bearer token on first L1 call
-        // Key insight from copilot-421-investigation: resolveApiKeyForProvider returns
-        // the GitHub PAT, not the copilot bearer. We must exchange it via
-        // resolveCopilotApiToken (same pattern as simple-completion-runtime.ts:148-157).
+        // Lazy proxy: reads the cached copilot bearer token directly from disk.
+        // The main session refreshes this file periodically via its token exchange.
+        // We just read the current valid token + derive baseUrl from proxy-ep.
         const lazyClient = {
           async _ensureClient(): Promise<LocalLlmClient | null> {
             if (_resolvedClient) return _resolvedClient;
             if (_resolveAttempted) return null;
             _resolveAttempted = true;
             try {
-              // Step 1: Get the GitHub PAT from auth profiles
-              const authResult = await api.runtime.modelAuth.resolveApiKeyForProvider({
-                provider: _providerKey,
-                cfg: api.config as any,
-              });
-              if (!authResult?.apiKey) {
-                logger.error(`[context-offload] Copilot: no PAT resolved. L1/L1.5/L2 disabled.`);
+              // Read the cached copilot token that the main session maintains
+              const fs = await import("node:fs/promises");
+              const path = await import("node:path");
+              const os = await import("node:os");
+              const tokenPath = path.join(os.homedir(), ".openclaw", "credentials", "github-copilot.token.json");
+              const raw = await fs.readFile(tokenPath, "utf8");
+              const cached = JSON.parse(raw) as { token?: string; expiresAt?: number };
+              if (!cached?.token) {
+                logger.error(`[context-offload] Copilot: no cached token at ${tokenPath}. L1/L1.5/L2 disabled.`);
                 return null;
               }
-              // Step 2: Exchange PAT for copilot bearer token (the missing step that caused 421)
-              let resolveCopilotApiToken: any;
-              try {
-                const sdk = await import("openclaw/plugin-sdk" as any);
-                resolveCopilotApiToken = sdk.resolveCopilotApiToken;
-              } catch {
-                logger.error(`[context-offload] Copilot: cannot import resolveCopilotApiToken. L1/L1.5/L2 disabled.`);
+              // Check expiry (expiresAt is unix timestamp in seconds)
+              const now = Date.now() / 1000;
+              if (cached.expiresAt && cached.expiresAt < now) {
+                logger.error(`[context-offload] Copilot: cached token expired (${Math.floor(now - cached.expiresAt)}s ago). L1/L1.5/L2 disabled.`);
                 return null;
               }
-              const copilotToken = await resolveCopilotApiToken({
-                githubToken: authResult.apiKey,
-              });
-              // Step 3: Use exchanged bearer + derived baseUrl
+              // Derive baseUrl from proxy-ep in token
+              const proxyMatch = cached.token.match(/proxy-ep=([^;\s]+)/i);
+              let effectiveBaseUrl = _baseUrl;
+              if (proxyMatch?.[1]) {
+                const host = proxyMatch[1].trim().replace(/^proxy\./i, "api.");
+                effectiveBaseUrl = `https://${host}`;
+              }
               _resolvedClient = new LocalLlmClient(
                 {
-                  baseUrl: copilotToken.baseUrl,
-                  apiKey: copilotToken.token,
+                  baseUrl: effectiveBaseUrl,
+                  apiKey: cached.token,
                   model: _modelId,
                   temperature: _temperature,
                   timeoutMs: _timeoutMs,
@@ -428,9 +429,9 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
                 },
                 logger,
               );
-              logger.info(`[context-offload] Copilot: PAT exchanged for bearer, baseUrl=${copilotToken.baseUrl}, model=${_modelId}`);
+              logger.info(`[context-offload] Copilot: using cached bearer token, baseUrl=${effectiveBaseUrl}, model=${_modelId}, expiresIn=${cached.expiresAt ? Math.floor(cached.expiresAt - now) : "unknown"}s`);
             } catch (err) {
-              logger.error(`[context-offload] Copilot token exchange failed: ${err}. L1/L1.5/L2 disabled.`);
+              logger.error(`[context-offload] Copilot: failed to read cached token: ${err}. L1/L1.5/L2 disabled.`);
             }
             return _resolvedClient;
           },
