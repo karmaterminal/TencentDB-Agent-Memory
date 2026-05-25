@@ -88,9 +88,12 @@ export async function callLlm(
         stream: true,
         store: false,
       };
-      if (typeof temperature === "number") {
-        body.temperature = temperature;
-      }
+      // Copilot Responses for some models (e.g. gpt-5.5) rejects `temperature`
+      // with "Unsupported parameter". Main session never sends temperature for
+      // these models either. Skip it on the raw-fetch Copilot path.
+      // Non-Copilot callers go through the Vercel SDK branch below where the
+      // SDK handles per-model param support.
+      // (Intentionally omit `temperature` here.)
       const res = await fetch(url, {
         method: "POST",
         headers: {
