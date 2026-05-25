@@ -1848,6 +1848,8 @@ class OffloadContextEngine {
           const paths = [
             "/usr/local/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
             "/usr/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
+            // Source-linked installs (symlinked from nvm or direct checkout)
+            `${process.env.HOME}/flesh_beast_tmp/openclaw/dist/plugin-sdk/index.js`,
           ];
           for (const p of paths) {
             try {
