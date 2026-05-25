@@ -1292,7 +1292,7 @@ class OffloadContextEngine {
   }
 
   get info() {
-    return { id: "openclaw-context-offload", name: "Context Offload Engine", version: "0.7.0", ownsCompaction: true };
+    return { id: "openclaw-context-offload", name: "Context Offload Engine", version: "0.7.0", ownsCompaction: false };
   }
 
   async bootstrap(params: any) {
