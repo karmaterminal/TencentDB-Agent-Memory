@@ -390,8 +390,18 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
                 cfg: api.config as any,
               });
               if (authResult?.apiKey) {
+                // Copilot API requires IDE-specific headers for routing.
+                // Without these, the endpoint returns 421 Misdirected Request.
+                const copilotHeaders: Record<string, string> = _providerKey.includes("copilot") ? {
+                  "Accept-Encoding": "identity",
+                  "Editor-Version": "vscode/1.107.0",
+                  "Editor-Plugin-Version": "copilot-chat/0.35.0",
+                  "User-Agent": "GitHubCopilotChat/0.35.0",
+                  "Copilot-Integration-Id": "vscode-chat",
+                  "Openai-Organization": "github-copilot",
+                } : {};
                 _resolvedClient = new LocalLlmClient(
-                  { baseUrl: _baseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs },
+                  { baseUrl: _baseUrl, apiKey: authResult.apiKey, model: _modelId, temperature: _temperature, timeoutMs: _timeoutMs, headers: copilotHeaders },
                   logger,
                 );
                 logger.info(`[context-offload] Local LLM mode: resolved live token for provider "${_providerKey}" (mode=${authResult.mode}, source=${authResult.source})`);

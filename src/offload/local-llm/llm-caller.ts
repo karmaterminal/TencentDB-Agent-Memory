@@ -13,6 +13,8 @@ const TAG = "[context-offload] [local-llm]";
 export interface LlmCallerConfig {
   baseUrl: string;
   apiKey: string;
+  /** Custom headers to include with every request (e.g. copilot IDE headers). */
+  headers?: Record<string, string>;
   model: string;
   temperature: number;
   timeoutMs: number;
@@ -52,6 +54,7 @@ export async function callLlm(
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
     compatibility: "compatible",
+    headers: config.headers,
   });
 
   try {
