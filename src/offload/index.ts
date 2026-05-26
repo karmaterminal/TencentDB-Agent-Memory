@@ -360,12 +360,18 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const baseUrl = providerCfg?.baseUrl ?? providerCfg?.baseURL;
       const apiKey = providerCfg?.apiKey;
 
+      // Auto-detect copilot provider: if providerKey contains "copilot" and
+      // no explicit baseUrl/apiKey config exists, go straight to the lazy
+      // token-file path. The baseUrl is derived from the cached token's
+      // proxy-ep field, so no models.providers stanza is needed.
+      const isCopilotProvider = providerKey.toLowerCase().includes("copilot");
+
       if (baseUrl && apiKey) {
         backendClient = new LocalLlmClient(
           { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
           logger,
         );
-      } else if (baseUrl && !apiKey && api.runtime?.modelAuth?.resolveApiKeyForProvider) {
+      } else if ((baseUrl && !apiKey) || isCopilotProvider) {
         // Copilot provider: resolve bearer token via modelAuth API and call directly
         // with required IDE routing headers. The copilot API requires these headers
         // for request routing — without them it returns 421 Misdirected Request.
@@ -417,6 +423,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
               if (proxyMatch?.[1]) {
                 const host = proxyMatch[1].trim().replace(/^proxy\./i, "api.");
                 effectiveBaseUrl = `https://${host}`;
+              }
+              if (!effectiveBaseUrl) {
+                logger.error(`[context-offload] Copilot: no baseUrl resolvable (no config stanza and no proxy-ep in token). L1/L1.5/L2 disabled.`);
+                return null;
               }
               _resolvedClient = new LocalLlmClient(
                 {
