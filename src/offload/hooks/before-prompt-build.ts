@@ -63,7 +63,7 @@ export function createBeforePromptBuildHandler(
       const hasDeleted = stateManager.deletedOffloadIds && stateManager.deletedOffloadIds.size > 0;
 
       if (!hasConfirmed && !hasDeleted) {
-        await injectMmdIntoMessages(messages, stateManager, logger, getContextWindow, pluginConfig, { waitForL15: true });
+        await injectMmdIntoMessages(messages, stateManager, logger, getContextWindow, pluginConfig, { waitForL15: pluginConfig?.waitForL15 ?? true });
         return undefined;
       }
 
@@ -238,7 +238,7 @@ export function createBeforePromptBuildHandler(
       }
 
       // Phase 3: MMD Injection
-      await injectMmdIntoMessages(messages, stateManager, logger, getContextWindow, pluginConfig, { waitForL15: true });
+      await injectMmdIntoMessages(messages, stateManager, logger, getContextWindow, pluginConfig, { waitForL15: pluginConfig?.waitForL15 ?? true });
 
       traceOffloadDecision({
         sessionKey: stateManager.getLastSessionKey(),

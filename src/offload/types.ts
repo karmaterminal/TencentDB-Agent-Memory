@@ -205,6 +205,15 @@ export interface PluginConfig {
    * Default: 0.12 (12%).
    */
   defaultSystemOverheadRatio?: number;
+  /**
+   * If true (default), `before_prompt_build` MMD injection waits for L1.5 to settle
+   * before injecting (preserves current behavior). If false, MMD injection proceeds
+   * even when L1.5 has not settled (e.g. when the local-LLM offload pipeline is
+   * 401-failing fleet-wide and L1.5 cannot complete). Set false to degrade gracefully
+   * rather than block prompt-build indefinitely on a broken offload pipeline.
+   * Default: true.
+   */
+  waitForL15?: boolean;
 }
 
 // ============================
