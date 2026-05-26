@@ -107,7 +107,7 @@ export class BackendClient {
   private baseUrl: string;
   private apiKey: string | undefined;
   /** Hardcoded timeout for all backend calls (L1/L1.5/L2/L4) */
-  private static readonly TIMEOUT_MS = 120_000;
+  private static readonly TIMEOUT_MS = 30_000;
   private logger: PluginLogger;
   private sessionKeyFn: () => string | null;
   /** Resolves the value of the `X-User-Id` header sent on every call. */

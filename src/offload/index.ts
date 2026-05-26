@@ -616,6 +616,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   //   - This turn has no MMD construction
   _l15Disposed = false; // Reset on re-registration
   const L15_RETRY_DELAY_MS = 3000;
+  const L15_SETTLE_TIMEOUT_MS = 15_000; // Max time to wait for L1.5 before force-settling
 
   /** L1.5 fail-safe: push a short boundary instead of marking entries on disk. */
   const _l15FailSafe = async (stateManager: OffloadStateManager, startIndex: number) => {
@@ -753,7 +754,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     // First attempt
     if (await attemptL15(stateManager, startIndex)) return;
 
-    // Single retry after delay (fire-and-forget)
+    // Single retry after delay (fire-and-forget) with hard timeout
     const retry = async () => {
       await new Promise((r) => setTimeout(r, L15_RETRY_DELAY_MS));
       if (_l15Disposed || stateManager.l15Settled) return;
@@ -764,6 +765,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       await _l15FailSafe(stateManager, startIndex);
     };
     retry().catch(() => {});
+
+    // Hard timeout: if L1.5 hasn't settled after L15_SETTLE_TIMEOUT_MS, force fail-safe
+    // This prevents indefinite blocking when backend hangs (e.g. expired auth → timeout)
+    setTimeout(async () => {
+      if (_l15Disposed || stateManager.l15Settled) return;
+      logger.warn(`[context-offload] L1.5 HARD TIMEOUT (${L15_SETTLE_TIMEOUT_MS}ms) — forcing fail-safe`);
+      await _l15FailSafe(stateManager, startIndex);
+    }, L15_SETTLE_TIMEOUT_MS);
   };
 
   // ─── Backend-aware L2 trigger helper ───────────────────────────────────────
@@ -1520,9 +1529,11 @@ class OffloadContextEngine {
               indicesToDelete.push(i); _fpDeletedCount++; continue;
             }
           }
-          // FIX: For mixed assistant messages (text + tool_use), strip deleted tool_use
+          // FIX: For ALL assistant messages with tool_use blocks, strip deleted tool_use
           // blocks to prevent orphaned tool_use without matching tool_result (Anthropic 400).
-          if (hasDeleted && isAssistantMessageWithToolUse(msg) && !isOnlyToolUseAssistant(msg)) {
+          // Previously gated on !isOnlyToolUseAssistant — but that skipped the most common case
+          // where ALL tool_use blocks in a message were offloaded, leaving an empty assistant msg.
+          if (hasDeleted && isAssistantMessageWithToolUse(msg)) {
             const content = msg.type === "message" ? msg.message?.content : msg.content;
             if (Array.isArray(content)) {
               for (let j = content.length - 1; j >= 0; j--) {
@@ -1533,6 +1544,10 @@ class OffloadContextEngine {
                     content.splice(j, 1);
                   }
                 }
+              }
+              // If all content blocks were stripped, add a placeholder to keep the message valid
+              if (content.length === 0) {
+                content.push({ type: "text", text: "[tool calls offloaded]" });
               }
             }
           }
