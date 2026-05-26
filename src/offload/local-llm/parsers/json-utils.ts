@@ -81,5 +81,8 @@ function tryParse<T>(s: string): T | null {
 
 function fixTrailingCommas(s: string): string {
   // Remove trailing commas before } or ]
-  return s.replace(/,\s*([}\]])/g, "$1");
+  let fixed = s.replace(/,\s*([}\]])/g, "$1");
+  // Fix truncated key-value pairs: "key":} or "key":] → "key":null} / "key":null]
+  fixed = fixed.replace(/:([\s]*)([}\]])/g, ":null$2");
+  return fixed;
 }

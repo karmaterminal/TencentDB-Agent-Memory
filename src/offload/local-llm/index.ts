@@ -107,7 +107,7 @@ export class LocalLlmClient {
 
     const result = parseL15Response(raw);
     if (!result) {
-      this.logger?.warn?.(`${TAG} L1.5: failed to parse judgment from LLM response (${raw.length} chars)`);
+      this.logger?.warn?.(`${TAG} L1.5: failed to parse judgment from LLM response (${raw.length} chars). Raw: ${raw.slice(0, 300)}`);
       // Return all-null to trigger normalizeJudgment's "LLM unavailable" path
       return {
         taskCompleted: false,
