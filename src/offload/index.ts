@@ -1236,6 +1236,24 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     const mgr = sk ? await _resolveSession(sk, ctx?.sessionId) : _lastActiveMgr;
     if (!mgr) return;
 
+    // ── L1.5 task judgment (fire-and-forget) ──
+    // In gateway/Discord mode, assemble() is never called (CLI-only).
+    // Trigger L1.5 here so it runs in all session modes.
+    const prompt = event?.prompt ?? event?.systemPrompt ?? "";
+    if (prompt && typeof prompt === "string" && prompt.length > 0 && backendClient) {
+      const promptHash = simpleHash(prompt);
+      if (promptHash !== mgr.lastL15PromptHash) {
+        mgr.lastL15PromptHash = promptHash;
+        mgr.l15Settled = false;
+        logger.info(`[context-offload] before_prompt_build L1.5 TRIGGERED: new prompt hash (${promptHash}), activeMmd=${mgr.getActiveMmdFile() ?? "null"}`);
+        judgeL15(mgr, { prompt, messages: event?.messages }, { sessionKey: sk }).catch((err: any) => {
+          logger.warn(`[context-offload] before_prompt_build L1.5 judge failed: ${err}`);
+        });
+      } else {
+        logger.debug?.(`[context-offload] before_prompt_build L1.5 SKIP: same prompt hash (${promptHash})`);
+      }
+    }
+
     // L1 flush (fire-and-forget)
     if (mgr.getPendingCount() > 0) {
       flushL1(mgr, "before_prompt_build_flush", true).then(async () => {
