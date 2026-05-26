@@ -381,7 +381,6 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         const _temperature = offloadConfig.temperature;
         const _timeoutMs = offloadConfig.backendTimeoutMs;
         let _resolvedClient: LocalLlmClient | null = null;
-        let _resolveAttempted = false;
 
         const copilotHeaders: Record<string, string> = _providerKey.includes("copilot") ? {
           "Editor-Version": "vscode/1.107.0",
@@ -394,11 +393,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         // Lazy proxy: reads the cached copilot bearer token directly from disk.
         // The main session refreshes this file periodically via its token exchange.
         // We just read the current valid token + derive baseUrl from proxy-ep.
+        let _cachedExpiresAt = 0;
         const lazyClient = {
           async _ensureClient(): Promise<LocalLlmClient | null> {
-            if (_resolvedClient) return _resolvedClient;
-            if (_resolveAttempted) return null;
-            _resolveAttempted = true;
+            // Re-read token if expired or not yet resolved
+            const nowSec = Date.now() / 1000;
+            if (_resolvedClient && _cachedExpiresAt > nowSec + 60) return _resolvedClient;
+            // Token expired or first attempt — (re-)read from disk
+            _resolvedClient = null;
             try {
               // Read the cached copilot token that the main session maintains
               const fs = await import("node:fs/promises");
@@ -411,12 +413,15 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
                 logger.error(`[context-offload] Copilot: no cached token at ${tokenPath}. L1/L1.5/L2 disabled.`);
                 return null;
               }
-              // Check expiry (expiresAt is unix timestamp in seconds)
+              // Check expiry (expiresAt may be in ms or seconds — normalize)
               const now = Date.now() / 1000;
-              if (cached.expiresAt && cached.expiresAt < now) {
-                logger.error(`[context-offload] Copilot: cached token expired (${Math.floor(now - cached.expiresAt)}s ago). L1/L1.5/L2 disabled.`);
+              // expiresAt > 1e12 means milliseconds; convert to seconds
+              const expiresAtSec = cached.expiresAt && cached.expiresAt > 1e12 ? cached.expiresAt / 1000 : (cached.expiresAt ?? 0);
+              if (expiresAtSec && expiresAtSec < now) {
+                logger.error(`[context-offload] Copilot: cached token expired (${Math.floor(now - expiresAtSec)}s ago). Waiting for refresh.`);
                 return null;
               }
+              _cachedExpiresAt = expiresAtSec;
               // Derive baseUrl from proxy-ep in token
               const proxyMatch = cached.token.match(/proxy-ep=([^;\s]+)/i);
               let effectiveBaseUrl = _baseUrl;
