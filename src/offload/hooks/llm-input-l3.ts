@@ -783,6 +783,57 @@ export function emergencyCompress(
       const role = nextMsg?.role ?? nextMsg?.message?.role ?? nextMsg?.type;
       if (role === "toolResult" || role === "tool") { deleteCount2++; } else { break; }
     }
+    // ORPHAN GUARD: collect every tool_use id inside the proposed delete range
+    // [0, deleteCount2) and extend the cut forward to absorb any matching
+    // tool_result that lives AFTER the boundary. Without this, head-delete
+    // can strip an assistant(tool_use) but leave its tool_result behind →
+    // Anthropic 400 ("No tool call found for ... call_id"). Matches the
+    // !isOnlyToolUseAssistant fix in compact()'s fast-path delete (commit 82bb498)
+    // for the head-delete code path.
+    {
+      const pendingToolUseIds = new Set<string>();
+      for (let i = 0; i < deleteCount2; i++) {
+        for (const id of extractAllToolUseIds(messages[i])) pendingToolUseIds.add(id);
+        if (isToolResultMessage(messages[i])) {
+          const tid = extractToolCallId(messages[i]);
+          if (tid) pendingToolUseIds.delete(tid);
+        }
+      }
+      // Extend forward to swallow any surviving tool_results whose tool_use was deleted
+      while (pendingToolUseIds.size > 0 && deleteCount2 < messages.length - EMERGENCY_MIN_MESSAGES_TO_KEEP) {
+        const nextMsg = messages[deleteCount2];
+        if (isToolResultMessage(nextMsg)) {
+          const tid = extractToolCallId(nextMsg);
+          if (tid && pendingToolUseIds.has(tid)) {
+            pendingToolUseIds.delete(tid);
+            deleteCount2++;
+            continue;
+          }
+        }
+        // Not a matching tool_result → stop extending; remaining unmatched
+        // pendingToolUseIds will be handled below by shrinking the cut.
+        break;
+      }
+      // If we still have unmatched tool_use ids (their tool_results live past
+      // the EMERGENCY_MIN_MESSAGES_TO_KEEP tail floor or beyond), SHRINK the cut
+      // to exclude the assistant message(s) that introduced them. Better to keep
+      // tokens than to create an orphan.
+      if (pendingToolUseIds.size > 0) {
+        let safeCutoff = deleteCount2;
+        while (safeCutoff > 0) {
+          const msg = messages[safeCutoff - 1];
+          const tuIds = extractAllToolUseIds(msg);
+          const introducesOrphan = tuIds.some((id) => pendingToolUseIds.has(id));
+          if (!introducesOrphan) break;
+          safeCutoff--;
+          for (const id of tuIds) pendingToolUseIds.delete(id);
+        }
+        if (safeCutoff < deleteCount2) {
+          logger.warn(`[context-offload] L3 emergency ORPHAN-GUARD: shrunk deleteCount2 ${deleteCount2}→${safeCutoff} to protect unmatched tool_use id(s)`);
+          deleteCount2 = safeCutoff;
+        }
+      }
+    }
     deleteCount2 = capDeleteCountForUserMessage(messages, deleteCount2);
     if (deleteCount2 <= 0) {
       // Head-delete is blocked (user message at index 0).
